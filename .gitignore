@@ -10,6 +10,7 @@
 build/*
 tests/llvm/*
 tests/viz/*
+.vscode/*
 
 # Linker output
 *.ilk
