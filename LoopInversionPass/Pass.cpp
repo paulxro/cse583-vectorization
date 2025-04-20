@@ -2,23 +2,25 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include  <iostream>
 #include <vector>
 
 #define TEST_TARGET_FUNCTION_NAME "test_main"
 
-
-/* I have no idea how to do this on the command line with clang LOL */
+/*
+ * Turns out we need to build OPT in DEBUG mode
+ * instead of RELEASE mode to use LLVM_DEBUG.
+ * Rather just use this macro, make sure to unset.
+*/
 #define DEBUG
 
 using namespace llvm;
 
-
-
-
-#ifdef DEBUG
 void _print_first_instr_in_loop(Loop *loop) {
+    #ifdef DEBUG
+
     if (!loop)
         return;
     
@@ -30,10 +32,10 @@ void _print_first_instr_in_loop(Loop *loop) {
         }
         break;
     }
+
+    #endif
 }
-#else
-void _print_first_instr_in_loop(Loop *loop) {}
-#endif
+
 
 
 namespace {
@@ -69,6 +71,51 @@ struct LoopInversionPass : public PassInfoMixin<LoopInversionPass> {
         return nested_loops;
     }
 
+    /*
+     * Duplicates all BasicBlocks in blocks according to VMap, into F.
+     *
+     * Turns out that LLVM gets really upset if you just try to duplicate
+     * instructions directly. Instead, it wants a VMap, which maintains
+     * some notion of cross-instruction references internally.
+     * 
+     * When the BasicBlock is cloned (using CloneBasicBlock) it knows
+     * what v-regs were referenced in the original code, and makes it so that we
+     * are referring to the new ones in the duplicated instructions. E.g.
+     * 
+     * ORIGINAL                  DUPLICATED
+     * 
+     * %1 = [something]      |  %3 = [something]
+     * %2 = %1 + [something] |  %4 = %3 + [something] <-- Note that %4 uses %3, not %1
+     * 
+     * Because our limited examples use arrays passed as parameters, LLVM
+     * gets upset about duplicated instructions not knowning what
+     * they are referring to in a void (e.g. it doesn't know how 
+     * to reference "a"). So we have to necessarily tie the duplicated blocks
+     * to the function.
+     * 
+     * @TODO: I HAVE NO IDEA WHERE THESE ARE ACTUALLY DUPLICATED IN THE FUNCTION.
+     *      DRAWING THE CFG DOESN'T SHOW THESE CHANGES, AND READING THE .LL FILE 
+     *      HURTS MY BRAIN.
+     */
+    std::vector<BasicBlock *> duplicate_bbs(std::vector<BasicBlock *> blocks, ValueToValueMapTy &VMap, Function *F) {
+        std::vector<BasicBlock *> duplicated_blocks;
+
+        for (BasicBlock *bb : blocks) {
+            BasicBlock *clone = CloneBasicBlock(bb, VMap, ".clone", F);
+            VMap[bb] = clone;
+            duplicated_blocks.push_back(clone);
+        }
+
+        return duplicated_blocks;
+    }
+
+    bool loop_contains_bb(Loop *loop, BasicBlock *bb) {
+        for (BasicBlock *loop_block : loop->getBlocks())
+            if (bb == loop_block)
+                return true;
+        return false;
+    }
+
 
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
@@ -98,7 +145,21 @@ struct LoopInversionPass : public PassInfoMixin<LoopInversionPass> {
         _print_first_instr_in_loop(outer_loop);
         _print_first_instr_in_loop(inner_loop);
 
-        return PreservedAnalyses::all();
+        std::vector<BasicBlock*> bbs_to_duplicate;
+        ValueToValueMapTy VMap;
+
+        for (BasicBlock *bb : outer_loop->getBlocks())
+            if (!loop_contains_bb(inner_loop, bb))
+                bbs_to_duplicate.push_back(bb);
+
+        std::vector<BasicBlock *> cloned_bbs = duplicate_bbs(bbs_to_duplicate, VMap, &F);
+        
+        for (BasicBlock &BB : F) {
+            BB.print(errs());
+        }
+
+
+        return PreservedAnalyses::none();
     }
 };
 

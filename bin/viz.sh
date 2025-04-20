@@ -9,8 +9,11 @@ make
 mkdir -p ../tests/llvm
 mkdir -p ../tests/viz
 
-clang -emit-llvm -S -DDEBUG ../tests/$1.c -Xclang -disable-O0-optnone -o ../tests/llvm/$1.ll
+CLANG_DEBUG_OPTS=""
+
+clang -emit-llvm -S $CLANG_DEBUG_OPTS ../tests/$1.c -Xclang -disable-O0-optnone -o ../tests/llvm/$1.ll
+
 opt -disable-output -passes="dot-cfg" ../tests/llvm/$1.ll
-cat .test_main.dot | dot -Tpdf > ../tests/viz/$1.pdf
+cat .cloned_fn.dot | dot -Tpdf > ../tests/viz/$1.pdf
 
 rm -f .*.dot
